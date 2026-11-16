@@ -83,8 +83,46 @@ Adafruit_SSD1306* display;
 // Cycles one value at a time over the whole display; null if no display.
 DisplayCarousel* display_carousel = nullptr;
 
-// Store alarm states in an array for local display output
-bool alarm_states[4] = {false, false, false, false};
+// Alarm states for local display output.
+// EDIT: Names shown on the display when an alarm is active. Add an entry (and
+// an index before kNumAlarms) for every alarm you connect.
+enum AlarmIndex {
+  kAlarmOilPressure,
+  kAlarmEngineTemp,
+  kAlarmFuelLow,
+  kAlarmWaterLow,
+  kNumAlarms
+};
+const char* const kAlarmNames[kNumAlarms] = {"Oil pressure", "Engine temp",
+                                             "Fuel low", "Water low"};
+bool alarm_states[kNumAlarms] = {};
+
+// Raise `alarm` when the tank level drops below a threshold set in the web UI
+// (default 25 %), and clear it only once the level is kHysteresis above it, so
+// fuel sloshing around the threshold does not make the alarm flicker.
+void ConnectTankLowAlarm(sensesp::FloatProducer* tank_level, const String& name,
+                         int sort_order, AlarmIndex alarm) {
+  const float kHysteresis = 2;  // percentage points
+  float default_percent = 25;
+  String config_path = "/Tanks/" + name + "/Low Level Alarm";
+  auto threshold = new sensesp::NumberConfig(default_percent, config_path);
+  ConfigItem(threshold)
+      ->set_title(name + " Low Level Alarm (%)")
+      ->set_description("Show a low-level alarm on the display when the " +
+                        name + " tank is below this level")
+      ->set_sort_order(sort_order);
+
+  tank_level->connect_to(
+      new sensesp::LambdaConsumer<float>([threshold, alarm, kHysteresis](float level) {
+        float percent = 100 * level;
+        float limit = threshold->get_value();
+        if (percent < limit) {
+          alarm_states[alarm] = true;
+        } else if (percent > limit + kHysteresis) {
+          alarm_states[alarm] = false;
+        }
+      }));
+}
 
 // Set the ADS1115 GAIN to adjust the analog input voltage range.
 // On HALMET, this refers to the voltage range of the ADS1115 input
@@ -246,7 +284,7 @@ void setup() {
   bool display_present = InitializeSSD1306(sensesp_app->get(), &display, i2c);
   if (display_present) {
     // EDIT: Change the time each page stays on screen (ms).
-    display_carousel = new DisplayCarousel(display, 2000);
+    display_carousel = new DisplayCarousel(display, 4000);
   }
 
   ///////////////////////////////////////////////////////////////////
@@ -262,9 +300,14 @@ void setup() {
   // EDIT: To enable more tanks, uncomment the lines below.
   auto tank_a1_volume = ConnectTankSender(ads1115, 0, "Fuel", "fuel.main", 3000,
                                           enable_signalk_output);
-  // auto tank_a2_volume = ConnectTankSender(ads1115, 1, "A2");
-  // auto tank_a3_volume = ConnectTankSender(ads1115, 2, "A3");
+  // A2 is used as a plain voltage input below; the water tank is on A3.
+  auto tank_a3_volume = ConnectTankSender(ads1115, 2, "Water",
+                                          "freshWater.main", 3100,
+                                          enable_signalk_output);
   // auto tank_a4_volume = ConnectTankSender(ads1115, 3, "A4");
+
+  ConnectTankLowAlarm(tank_a1_volume, "Fuel", 3008, kAlarmFuelLow);
+  ConnectTankLowAlarm(tank_a3_volume, "Water", 3108, kAlarmWaterLow);
 
 #ifdef ENABLE_NMEA2000_OUTPUT
   // Tank 1, instance 0. Capacity 200 liters. You can change the capacity
@@ -279,15 +322,30 @@ void setup() {
       ->set_sort_order(3005);
 
   tank_a1_volume->connect_to(&(tank_a1_sender->tank_level_));
+
+  // Water tank on A3, instance 0 of the fresh water type. Capacity 100 liters.
+  N2kFluidLevelSender* tank_a3_sender = new N2kFluidLevelSender(
+      "/Tanks/Water/NMEA 2000", 0, N2kft_Water, 100, nmea2000);
+
+  ConfigItem(tank_a3_sender)
+      ->set_title("Tank A3 NMEA 2000")
+      ->set_description("NMEA 2000 tank sender for tank A3 (water)")
+      ->set_sort_order(3105);
+
+  tank_a3_volume->connect_to(&(tank_a3_sender->tank_level_));
 #endif  // ENABLE_NMEA2000_OUTPUT
 
   if (display_carousel) {
     // EDIT: Duplicate the lines below to make the display show all your tanks.
-    int tank_a1_page = display_carousel->add_page("Tank A1");
+    int fuel_page = display_carousel->add_page("Fuel");
     tank_a1_volume->connect_to(
-        new LambdaConsumer<float>([tank_a1_page](float value) {
-          display_carousel->set_value(tank_a1_page,
-                                      String(100 * value, 0) + " %");
+        new LambdaConsumer<float>([fuel_page](float value) {
+          display_carousel->set_value(fuel_page, String(100 * value, 0) + " %");
+        }));
+    int water_page = display_carousel->add_page("Water");
+    tank_a3_volume->connect_to(
+        new LambdaConsumer<float>([water_page](float value) {
+          display_carousel->set_value(water_page, String(100 * value, 0) + " %");
         }));
   }
 
@@ -334,14 +392,16 @@ void setup() {
   // Update the alarm states based on the input value changes.
   // EDIT: If you added more alarm inputs, uncomment the respective lines below.
   alarm_d2_input->connect_to(
-      new LambdaConsumer<bool>([](bool value) { alarm_states[1] = value; }));
+      new LambdaConsumer<bool>(
+          [](bool value) { alarm_states[kAlarmOilPressure] = value; }));
   // In this example, alarm_d3_input is active low, so invert the value.
   auto alarm_d3_inverted = alarm_d3_input->connect_to(
       new LambdaTransform<bool, bool>([](bool value) { return !value; }));
   alarm_d3_inverted->connect_to(
-      new LambdaConsumer<bool>([](bool value) { alarm_states[2] = value; }));
+      new LambdaConsumer<bool>(
+          [](bool value) { alarm_states[kAlarmEngineTemp] = value; }));
   // alarm_d4_input->connect_to(
-  //     new LambdaConsumer<bool>([](bool value) { alarm_states[3] = value; }));
+  //     new LambdaConsumer<bool>([](bool value) { alarm_states[kAlarmX] = value; }));
 
 #ifdef ENABLE_NMEA2000_OUTPUT
   // EDIT: This example connects the D2 alarm input to the low oil pressure
@@ -390,7 +450,7 @@ void setup() {
 #endif  // ENABLE_NMEA2000_OUTPUT
 
   if (display_carousel) {
-    int rpm_d1_page = display_carousel->add_page("RPM D1");
+    int rpm_d1_page = display_carousel->add_page("RPM");
     tacho_d1_frequency->connect_to(
         new LambdaConsumer<float>([rpm_d1_page](float value) {
           display_carousel->set_value(rpm_d1_page, String(60 * value, 0));
@@ -431,13 +491,15 @@ void setup() {
 
   // Connect the outputs to the display
   if (display_carousel) {
-    // Active alarm inputs by name ("D2 D3"), or "OK" when none is active.
+    // Active alarms by name ("Oil pressure, Fuel low"; long lists scroll), or
+    // "OK" when none is active.
     int alarms_page = display_carousel->add_page("Alarms");
     event_loop()->onRepeat(1000, [alarms_page]() {
       String active;
-      for (int i = 0; i < 4; i++) {
+      for (int i = 0; i < kNumAlarms; i++) {
         if (alarm_states[i]) {
-          active += (active.length() ? " D" : "D") + String(i + 1);
+          if (active.length()) active += ", ";
+          active += kAlarmNames[i];
         }
       }
       display_carousel->set_title(alarms_page, active.length() ? "ALARM" : "Alarms");

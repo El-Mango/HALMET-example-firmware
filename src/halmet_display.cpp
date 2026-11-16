@@ -55,10 +55,6 @@ static int TextWidth(const String& text, int size) {
   return text.length() == 0 ? 0 : text.length() * 6 * size - size;
 }
 
-static bool Fits(const String& text, int size) {
-  return TextWidth(text, size) <= kScreenWidth;
-}
-
 static void DrawCentered(Adafruit_SSD1306* display, const String& text,
                          int size, int y) {
   int x = (kScreenWidth - TextWidth(text, size)) / 2;
@@ -67,32 +63,22 @@ static void DrawCentered(Adafruit_SSD1306* display, const String& text,
   display->print(text);
 }
 
-// Split `text` into two lines that each fit at `size`, breaking at a '.', ' '
-// or ':' and choosing the most even split ("192." / "168.4.1" rather than
-// "192.168.4." / "1"). Returns false if no such split exists.
-static bool SplitInTwo(const String& text, int size, String* first,
-                       String* second) {
-  int best_longest = -1;
-  for (int i = 1; i < (int)text.length() - 1; i++) {
-    char c = text[i];
-    if (c != '.' && c != ' ' && c != ':') continue;
-    String a = text.substring(0, c == ' ' ? i : i + 1);
-    String b = text.substring(i + 1);
-    if (!Fits(a, size) || !Fits(b, size)) continue;
-    int longest = a.length() > b.length() ? a.length() : b.length();
-    if (best_longest < 0 || longest < best_longest) {
-      best_longest = longest;
-      *first = a;
-      *second = b;
-    }
-  }
-  return best_longest >= 0;
-}
+const int kTitleSize = 2;
+const int kValueSize = 3;
+const int kTitleY = 4;
+const int kValueY = 32;
+// Scrolling: move kScrollStepPx every kScrollStepMs, holding still for
+// kScrollPauseMs at the start and at the end. Each redraw pushes the whole
+// 1 KB frame over I2C, so the step interval is kept modest.
+const unsigned int kScrollStepMs = 100;
+const int kScrollStepPx = 6;
+const unsigned int kScrollPauseMs = 1000;
 
 DisplayCarousel::DisplayCarousel(Adafruit_SSD1306* display,
-                                 unsigned int interval_ms)
-    : display_{display} {
-  sensesp::event_loop()->onRepeat(interval_ms, [this]() { show_next(); });
+                                 unsigned int page_ms)
+    : display_{display}, page_ms_{page_ms} {
+  page_start_ = millis();
+  sensesp::event_loop()->onRepeat(kScrollStepMs, [this]() { tick(); });
 }
 
 int DisplayCarousel::add_page(const String& title, const String& value) {
@@ -108,35 +94,62 @@ void DisplayCarousel::set_value(int page, const String& value) {
   if (page >= 0 && page < (int)pages_.size()) pages_[page].second = value;
 }
 
-void DisplayCarousel::show_next() {
+void DisplayCarousel::tick() {
   if (pages_.empty()) return;
-  current_ = (current_ + 1) % pages_.size();
-  draw(pages_[current_].first, pages_[current_].second);
+  unsigned long elapsed = millis() - page_start_;
+
+  // A value wider than the screen scrolls; its page lasts at least as long
+  // as the scroll plus both pauses.
+  int overflow = TextWidth(pages_[current_].second, kValueSize) - kScreenWidth;
+  unsigned long duration = page_ms_;
+  if (overflow > 0) {
+    unsigned long scroll_ms =
+        ((overflow + kScrollStepPx - 1) / kScrollStepPx) * kScrollStepMs;
+    unsigned long needed = 2 * kScrollPauseMs + scroll_ms;
+    if (needed > duration) duration = needed;
+  }
+  if (elapsed >= duration) {
+    current_ = (current_ + 1) % pages_.size();
+    page_start_ = millis();
+    elapsed = 0;
+    overflow =
+        TextWidth(pages_[current_].second, kValueSize) - kScreenWidth;
+  }
+
+  int offset = 0;
+  if (overflow > 0 && elapsed > kScrollPauseMs) {
+    offset = ((elapsed - kScrollPauseMs) / kScrollStepMs) * kScrollStepPx;
+    if (offset > overflow) offset = overflow;
+  }
+
+  const String& title = pages_[current_].first;
+  const String& value = pages_[current_].second;
+  if (title == drawn_title_ && value == drawn_value_ &&
+      offset == drawn_offset_) {
+    return;
+  }
+  draw(title, value, offset);
+  drawn_title_ = title;
+  drawn_value_ = value;
+  drawn_offset_ = offset;
 }
 
-// Layout on 128x64: title at size 2 (16 px) on top, value at size 3 (24 px,
-// up to 7 characters) or size 2 (up to 10) below. A longer value, such as an
-// IP address, takes two lines at size 2 under a small (size 1) title.
-void DisplayCarousel::draw(const String& title, const String& value) {
+void DisplayCarousel::draw(const String& title, const String& value,
+                           int scroll_offset) {
   display_->clearDisplay();
   display_->setTextWrap(false);
   display_->setTextColor(SSD1306_WHITE);
 
-  int title_size = Fits(title, 2) ? 2 : 1;
-  String first, second;
-  if (Fits(value, 3)) {
-    DrawCentered(display_, title, title_size, 4);
-    DrawCentered(display_, value, 3, 32);
-  } else if (Fits(value, 2)) {
-    DrawCentered(display_, title, title_size, 4);
-    DrawCentered(display_, value, 2, 36);
-  } else if (SplitInTwo(value, 2, &first, &second)) {
-    DrawCentered(display_, title, 1, 0);
-    DrawCentered(display_, first, 2, 18);
-    DrawCentered(display_, second, 2, 42);
+  int title_size = TextWidth(title, kTitleSize) <= kScreenWidth ? kTitleSize : 1;
+  DrawCentered(display_, title, title_size, kTitleY);
+
+  if (TextWidth(value, kValueSize) <= kScreenWidth) {
+    DrawCentered(display_, value, kValueSize, kValueY);
   } else {
-    DrawCentered(display_, title, title_size, 4);
-    DrawCentered(display_, value, 1, 40);
+    // Characters that fall off the left edge are clipped by Adafruit_GFX.
+    display_->setTextSize(kValueSize);
+    display_->setCursor(-scroll_offset, kValueY);
+    display_->print(value);
   }
   display_->display();
 }
