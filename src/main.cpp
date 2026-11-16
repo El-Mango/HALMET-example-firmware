@@ -80,6 +80,8 @@ ObservableValue<int> n2k_rx_counter{0};
 
 TwoWire* i2c;
 Adafruit_SSD1306* display;
+// Cycles one value at a time over the whole display; null if no display.
+DisplayCarousel* display_carousel = nullptr;
 
 // Store alarm states in an array for local display output
 bool alarm_states[4] = {false, false, false, false};
@@ -242,6 +244,10 @@ void setup() {
 
   // Initialize the OLED display
   bool display_present = InitializeSSD1306(sensesp_app->get(), &display, i2c);
+  if (display_present) {
+    // EDIT: Change the time each page stays on screen (ms).
+    display_carousel = new DisplayCarousel(display, 2000);
+  }
 
   ///////////////////////////////////////////////////////////////////
   // Analog inputs
@@ -275,10 +281,14 @@ void setup() {
   tank_a1_volume->connect_to(&(tank_a1_sender->tank_level_));
 #endif  // ENABLE_NMEA2000_OUTPUT
 
-  if (display_present) {
+  if (display_carousel) {
     // EDIT: Duplicate the lines below to make the display show all your tanks.
-    tank_a1_volume->connect_to(new LambdaConsumer<float>(
-        [](float value) { PrintValue(display, 2, "Tank A1", 100 * value); }));
+    int tank_a1_page = display_carousel->add_page("Tank A1");
+    tank_a1_volume->connect_to(
+        new LambdaConsumer<float>([tank_a1_page](float value) {
+          display_carousel->set_value(tank_a1_page,
+                                      String(100 * value, 0) + " %");
+        }));
   }
 
   // Read the voltage level of analog input A2
@@ -379,9 +389,12 @@ void setup() {
   tacho_d1_frequency->connect_to(&(engine_rapid_sender->engine_speed_));
 #endif  // ENABLE_NMEA2000_OUTPUT
 
-  if (display_present) {
-    tacho_d1_frequency->connect_to(new LambdaConsumer<float>(
-        [](float value) { PrintValue(display, 3, "RPM D1", 60 * value); }));
+  if (display_carousel) {
+    int rpm_d1_page = display_carousel->add_page("RPM D1");
+    tacho_d1_frequency->connect_to(
+        new LambdaConsumer<float>([rpm_d1_page](float value) {
+          display_carousel->set_value(rpm_d1_page, String(60 * value, 0));
+        }));
   }
 
 #ifdef ENABLE_NMEA2000_OUTPUT
@@ -417,18 +430,34 @@ void setup() {
   // Display setup
 
   // Connect the outputs to the display
-  if (display_present) {
-    event_loop()->onRepeat(1000, []() {
-      PrintValue(display, 1, "IP:", WiFi.localIP().toString());
+  if (display_carousel) {
+    // Active alarm inputs by name ("D2 D3"), or "OK" when none is active.
+    int alarms_page = display_carousel->add_page("Alarms");
+    event_loop()->onRepeat(1000, [alarms_page]() {
+      String active;
+      for (int i = 0; i < 4; i++) {
+        if (alarm_states[i]) {
+          active += (active.length() ? " D" : "D") + String(i + 1);
+        }
+      }
+      display_carousel->set_title(alarms_page, active.length() ? "ALARM" : "Alarms");
+      display_carousel->set_value(alarms_page, active.length() ? active : "OK");
     });
 
-    // Create a poor man's "christmas tree" display for the alarms
-    event_loop()->onRepeat(1000, []() {
-      char state_string[5] = {};
-      for (int i = 0; i < 4; i++) {
-        state_string[i] = alarm_states[i] ? '*' : '_';
+    // Station IP once joined to a network; the setup access point's IP while
+    // the device is still being provisioned (localIP() is 0.0.0.0 then).
+    int ip_page = display_carousel->add_page("IP");
+    event_loop()->onRepeat(1000, [ip_page]() {
+      if (WiFi.isConnected()) {
+        display_carousel->set_title(ip_page, "IP");
+        display_carousel->set_value(ip_page, WiFi.localIP().toString());
+      } else if (WiFi.getMode() & WIFI_AP) {
+        display_carousel->set_title(ip_page, "Setup AP");
+        display_carousel->set_value(ip_page, WiFi.softAPIP().toString());
+      } else {
+        display_carousel->set_title(ip_page, "IP");
+        display_carousel->set_value(ip_page, "no network");
       }
-      PrintValue(display, 4, "Alarm", state_string);
     });
   }
 
