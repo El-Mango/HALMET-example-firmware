@@ -12,13 +12,12 @@ namespace halmet {
 // HALMET constant measurement current (A)
 const float kMeasurementCurrent = 0.01;
 
-// Default fuel tank size, in m3
-const float kTankDefaultSize = 120. / 1000;
-
 sensesp::FloatProducer* ConnectTankSender(Adafruit_ADS1115* ads1115,
                                           int channel, const String& name,
                                           const String& sk_id, int sort_order,
-                                          bool enable_signalk_output) {
+                                          bool enable_signalk_output,
+                                          float default_capacity_liters,
+                                          TankCapacity** capacity) {
   const uint ads_read_delay = 500;  // ms
 
   // Configure the sender resistance sensor
@@ -128,26 +127,45 @@ sensesp::FloatProducer* ConnectTankSender(Adafruit_ADS1115* ads1115,
     tank_level->connect_to(tank_level_sk_output);
   }
 
-  // Configure the linear transform for the tank volume
+  // Tank capacity in liters: turns the level into a volume for Signal K, and
+  // is shared with the NMEA 2000 sender through `capacity`.
 
-  char volume_config_path[80];
-  snprintf(volume_config_path, sizeof(volume_config_path),
-           "/Tanks/%s/Total Volume", name.c_str());
-  char volume_title[80];
-  snprintf(volume_title, sizeof(volume_title), "%s Tank Total Volume",
+  char capacity_config_path[80];
+  snprintf(capacity_config_path, sizeof(capacity_config_path),
+           "/Tanks/%s/Capacity", name.c_str());
+  char capacity_title[80];
+  snprintf(capacity_title, sizeof(capacity_title), "%s Tank Capacity (L)",
            name.c_str());
-  char volume_description[80];
-  snprintf(volume_description, sizeof(volume_description),
-           "Calculated total volume of the %s tank", name.c_str());
+  char capacity_description[80];
+  snprintf(capacity_description, sizeof(capacity_description),
+           "Capacity of the %s tank in liters", name.c_str());
   auto tank_volume =
-      new sensesp::Linear(kTankDefaultSize, 0, volume_config_path);
+      new TankCapacity(default_capacity_liters, capacity_config_path);
+
+  if (!tank_volume->loaded()) {
+    // Earlier versions set the size as a Linear "Total Volume" multiplier in
+    // m3. Carry a saved value over so an upgrade keeps the user's capacity.
+    char old_config_path[80];
+    snprintf(old_config_path, sizeof(old_config_path), "/Tanks/%s/Total Volume",
+             name.c_str());
+    auto old_volume = new sensesp::Linear(0, 0, old_config_path);  // loads it
+    JsonDocument doc;
+    JsonObject old_config = doc.to<JsonObject>();
+    old_volume->to_json(old_config);
+    float old_m3 = old_config["multiplier"] | 0.0f;
+    if (old_m3 > 0) {
+      tank_volume->set_capacity_liters(old_m3 * 1000);
+      tank_volume->save();
+    }
+  }
 
   ConfigItem(tank_volume)
-      ->set_title(volume_title)
-      ->set_description(volume_description)
+      ->set_title(capacity_title)
+      ->set_description(capacity_description)
       ->set_sort_order(sort_order + 3);
 
   tank_level->connect_to(tank_volume);
+  if (capacity != nullptr) *capacity = tank_volume;
 
   if (enable_signalk_output) {
     char volume_sk_config_path[80];

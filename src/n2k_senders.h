@@ -4,6 +4,8 @@
 #include <N2kMessages.h>
 #include <NMEA2000.h>
 
+#include <functional>
+
 #include "counting_nmea2000.h"
 #include "sensesp/system/saveable.h"
 #include "sensesp/transforms/lambda_transform.h"
@@ -318,8 +320,11 @@ const String ConfigSchema(const N2kEngineParameterDynamicSender& obj) {
  */
 class N2kFluidLevelSender : public sensesp::FileSystemSaveable {
  public:
+  /// `tank_capacity` returns the capacity in liters at send time, so the tank's
+  /// single capacity setting (TankCapacity) drives this message too.
   N2kFluidLevelSender(String config_path, uint8_t tank_instance,
-                      tN2kFluidType tank_type, double tank_capacity,
+                      tN2kFluidType tank_type,
+                      std::function<double()> tank_capacity,
                       CountingNMEA2000* nmea2000)
       : sensesp::FileSystemSaveable{config_path},
         tank_instance_{tank_instance},
@@ -340,13 +345,15 @@ class N2kFluidLevelSender : public sensesp::FileSystemSaveable {
       // At the moment, the PGN is sent regardless of whether all the values
       // are invalid or not.
       SetN2kFluidLevel(N2kMsg, this->tank_instance_, this->tank_type_,
-                       this->tank_level_percent_.get(), this->tank_capacity_);
+                       this->tank_level_percent_.get(), this->tank_capacity_());
       this->nmea2000_->SendMsg(N2kMsg);
     });
   }
 
   virtual bool from_json(const JsonObject& config) override {
-    String expected[] = {"tank_instance", "tank_type", "tank_capacity"};
+    // Capacity is no longer stored here (see TankCapacity); a "tank_capacity"
+    // key left in an older saved config is ignored.
+    String expected[] = {"tank_instance", "tank_type"};
     for (auto str : expected) {
       if (!config[str].is<int>()) {
         debugE("N2kFluidLevelSender: Missing configuration key %s",
@@ -356,14 +363,12 @@ class N2kFluidLevelSender : public sensesp::FileSystemSaveable {
     }
     tank_instance_ = config["tank_instance"];
     tank_type_ = config["tank_type"];
-    tank_capacity_ = config["tank_capacity"];
     return true;
   }
 
   virtual bool to_json(JsonObject& config) override {
     config["tank_instance"] = tank_instance_;
     config["tank_type"] = tank_type_;
-    config["tank_capacity"] = tank_capacity_;
     return true;
   }
 
@@ -376,7 +381,7 @@ class N2kFluidLevelSender : public sensesp::FileSystemSaveable {
 
   uint8_t tank_instance_;
   tN2kFluidType tank_type_;
-  double tank_capacity_;  // in liters
+  std::function<double()> tank_capacity_;  // in liters
   sensesp::RepeatExpiring<double> tank_level_percent_{repeat_interval_,
                                                       expiry_};
 };
@@ -386,8 +391,7 @@ const String ConfigSchema(const N2kFluidLevelSender& obj) {
       "type": "object",
       "properties": {
         "tank_instance": { "title": "Tank instance", "type": "integer", "description": "Tank NMEA 2000 instance number (0-13)" },
-        "tank_type": { "title": "Tank type", "type": "integer", "description": "Tank type (0-13)" },
-        "tank_capacity": { "title": "Tank capacity", "type": "number", "description": "Tank capacity (liters)" }
+        "tank_type": { "title": "Tank type", "type": "integer", "description": "Tank type (0-13)" }
       }
     })###";
 };

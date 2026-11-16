@@ -4,6 +4,7 @@
 #include <Adafruit_ADS1X15.h>
 
 #include "sensesp/sensors/sensor.h"
+#include "sensesp/transforms/transform.h"
 #include "sensesp_base_app.h"
 
 namespace halmet {
@@ -11,10 +12,68 @@ namespace halmet {
 // HALMET voltage divider scale factor
 const float kVoltageDividerScale = 33.3 / 3.3;
 
+/**
+ * @brief A tank's capacity in liters, set in the web UI.
+ *
+ * As a transform it turns the tank level (ratio 0..1) into the current volume
+ * in m3 for Signal K; capacity_liters() gives the same figure to the NMEA 2000
+ * fluid level sender, so one setting drives both outputs.
+ */
+class TankCapacity : public sensesp::Transform<float, float> {
+ public:
+  TankCapacity(float default_liters, const String& config_path)
+      : sensesp::Transform<float, float>(config_path),
+        capacity_liters_{default_liters} {
+    loaded_ = this->load();
+  }
+
+  void set(const float& level) override {
+    this->emit(level * capacity_liters_ / 1000.0f);  // liters -> m3
+  }
+
+  float capacity_liters() const { return capacity_liters_; }
+  void set_capacity_liters(float liters) { capacity_liters_ = liters; }
+  /// False until the capacity has been saved once (a fresh or upgraded unit).
+  bool loaded() const { return loaded_; }
+
+  bool to_json(JsonObject& config) override {
+    config["capacity"] = capacity_liters_;
+    return true;
+  }
+
+  bool from_json(const JsonObject& config) override {
+    if (!config["capacity"].is<float>()) return false;
+    capacity_liters_ = config["capacity"].as<float>();
+    return true;
+  }
+
+ private:
+  float capacity_liters_;
+  bool loaded_ = false;
+};
+
+inline const String ConfigSchema(const TankCapacity& obj) {
+  return R"###({
+      "type": "object",
+      "properties": {
+        "capacity": { "title": "Capacity", "type": "number", "description": "Tank capacity in liters. Used for the Signal K volume and the NMEA 2000 fluid level message." }
+      }
+    })###";
+}
+
+/**
+ * @brief Connect a resistive tank sender on an ADS1115 channel.
+ *
+ * Returns the tank level as a ratio (0..1). If `capacity` is given, it receives
+ * the tank's TankCapacity so other outputs (e.g. NMEA 2000) can use the same
+ * capacity setting.
+ */
 sensesp::FloatProducer* ConnectTankSender(Adafruit_ADS1115* ads1115,
                                           int channel, const String& name,
                                           const String& sk_id, int sort_order,
-                                          bool enable_signalk_output = true);
+                                          bool enable_signalk_output = true,
+                                          float default_capacity_liters = 120,
+                                          TankCapacity** capacity = nullptr);
 
 class ADS1115VoltageInput : public sensesp::FloatSensor {
  public:

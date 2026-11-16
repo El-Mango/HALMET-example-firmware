@@ -296,25 +296,30 @@ void setup() {
   bool enable_signalk_output = false;
 #endif
 
-  // Connect the tank senders.
-  // EDIT: To enable more tanks, uncomment the lines below.
-  auto tank_a1_volume = ConnectTankSender(ads1115, 0, "Fuel", "fuel.main", 3000,
-                                          enable_signalk_output);
+  // Connect the tank senders. Each tank has one capacity setting in the web
+  // UI ("<Name> Tank Capacity (L)") used by both Signal K and NMEA 2000.
+  // EDIT: To enable more tanks, uncomment the lines below. The number before
+  // the capacity pointer is the default capacity in liters.
+  TankCapacity* fuel_capacity = nullptr;
+  auto tank_a1_volume =
+      ConnectTankSender(ads1115, 0, "Fuel", "fuel.main", 3000,
+                        enable_signalk_output, 200, &fuel_capacity);
   // A2 is used as a plain voltage input below; the water tank is on A3.
-  auto tank_a3_volume = ConnectTankSender(ads1115, 2, "Water",
-                                          "freshWater.main", 3100,
-                                          enable_signalk_output);
+  TankCapacity* water_capacity = nullptr;
+  auto tank_a3_volume =
+      ConnectTankSender(ads1115, 2, "Water", "freshWater.main", 3100,
+                        enable_signalk_output, 100, &water_capacity);
   // auto tank_a4_volume = ConnectTankSender(ads1115, 3, "A4");
 
   ConnectTankLowAlarm(tank_a1_volume, "Fuel", 3008, kAlarmFuelLow);
   ConnectTankLowAlarm(tank_a3_volume, "Water", 3108, kAlarmWaterLow);
 
 #ifdef ENABLE_NMEA2000_OUTPUT
-  // Tank 1, instance 0. Capacity 200 liters. You can change the capacity
-  // in the web UI as well.
+  // Fuel tank, instance 0. The capacity comes from "Fuel Tank Capacity (L)".
   // EDIT: Make sure this matches your tank configuration above.
   N2kFluidLevelSender* tank_a1_sender = new N2kFluidLevelSender(
-      "/Tanks/Fuel/NMEA 2000", 0, N2kft_Fuel, 200, nmea2000);
+      "/Tanks/Fuel/NMEA 2000", 0, N2kft_Fuel,
+      [fuel_capacity]() { return fuel_capacity->capacity_liters(); }, nmea2000);
 
   ConfigItem(tank_a1_sender)
       ->set_title("Tank A1 NMEA 2000")
@@ -323,9 +328,12 @@ void setup() {
 
   tank_a1_volume->connect_to(&(tank_a1_sender->tank_level_));
 
-  // Water tank on A3, instance 0 of the fresh water type. Capacity 100 liters.
+  // Water tank on A3, instance 0 of the fresh water type. The capacity comes
+  // from "Water Tank Capacity (L)".
   N2kFluidLevelSender* tank_a3_sender = new N2kFluidLevelSender(
-      "/Tanks/Water/NMEA 2000", 0, N2kft_Water, 100, nmea2000);
+      "/Tanks/Water/NMEA 2000", 0, N2kft_Water,
+      [water_capacity]() { return water_capacity->capacity_liters(); },
+      nmea2000);
 
   ConfigItem(tank_a3_sender)
       ->set_title("Tank A3 NMEA 2000")
