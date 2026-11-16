@@ -23,7 +23,8 @@ void PrintValue(Adafruit_SSD1306* display, int row, String title, String value);
  * @brief Shows one value at a time, full screen, cycling through pages.
  *
  * The 128x64 OLED is too small to read several values in the 6x8 font at a
- * glance. Each page is a title (size 2) over a large value (size 3). A value
+ * glance. Each page is a left-aligned title (size 2) over a large, centred
+ * value (size 3). A value
  * too wide for the screen scrolls horizontally, and its page stays up until
  * the scroll has finished. Add pages with add_page() and update them with
  * set_title()/set_value() from wherever the value is produced; the display is

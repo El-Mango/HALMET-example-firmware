@@ -141,7 +141,10 @@ void DisplayCarousel::draw(const String& title, const String& value,
   display_->setTextColor(SSD1306_WHITE);
 
   int title_size = TextWidth(title, kTitleSize) <= kScreenWidth ? kTitleSize : 1;
-  DrawCentered(display_, title, title_size, kTitleY);
+  // Titles are left-aligned; values are centred (or scroll) below.
+  display_->setTextSize(title_size);
+  display_->setCursor(0, kTitleY);
+  display_->print(title);
 
   if (TextWidth(value, kValueSize) <= kScreenWidth) {
     DrawCentered(display_, value, kValueSize, kValueY);

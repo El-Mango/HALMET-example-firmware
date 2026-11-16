@@ -506,19 +506,21 @@ void setup() {
       display_carousel->set_value(alarms_page, active.length() ? active : "OK");
     });
 
-    // Station IP once joined to a network; the setup access point's IP while
-    // the device is still being provisioned (localIP() is 0.0.0.0 then).
-    int ip_page = display_carousel->add_page("IP");
-    event_loop()->onRepeat(1000, [ip_page]() {
+    // The network the device is on: the joined WiFi network once configured,
+    // or its own setup access point while it is being provisioned (when
+    // localIP() would still read 0.0.0.0).
+    int ssid_page = display_carousel->add_page("WiFi SSID");
+    int ip_page = display_carousel->add_page("WiFi IP");
+    event_loop()->onRepeat(1000, [ssid_page, ip_page]() {
       if (WiFi.isConnected()) {
-        display_carousel->set_title(ip_page, "IP");
+        display_carousel->set_value(ssid_page, WiFi.SSID());
         display_carousel->set_value(ip_page, WiFi.localIP().toString());
       } else if (WiFi.getMode() & WIFI_AP) {
-        display_carousel->set_title(ip_page, "Setup AP");
+        display_carousel->set_value(ssid_page, WiFi.softAPSSID());
         display_carousel->set_value(ip_page, WiFi.softAPIP().toString());
       } else {
-        display_carousel->set_title(ip_page, "IP");
-        display_carousel->set_value(ip_page, "no network");
+        display_carousel->set_value(ssid_page, "none");
+        display_carousel->set_value(ip_page, "none");
       }
     });
   }
