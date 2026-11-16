@@ -38,14 +38,22 @@ class DisplayCarousel {
   int add_page(const String& title, const String& value = "--");
   void set_title(int page, const String& title);
   void set_value(int page, const String& value);
+  /// Hidden pages are skipped by the carousel (e.g. a network that is off).
+  void set_visible(int page, bool visible);
 
  private:
+  struct Page {
+    String title;
+    String value;
+    bool visible = true;
+  };
+
   void tick();
   void draw(const String& title, const String& value, int scroll_offset);
 
   Adafruit_SSD1306* display_;
   unsigned int page_ms_;
-  std::vector<std::pair<String, String>> pages_;  // (title, value)
+  std::vector<Page> pages_;
   size_t current_ = 0;
   unsigned long page_start_ = 0;
   // What is on screen now, to skip redundant redraws over I2C.

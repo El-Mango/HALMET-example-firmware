@@ -506,23 +506,40 @@ void setup() {
       display_carousel->set_value(alarms_page, active.length() ? active : "OK");
     });
 
-    // The network the device is on: the joined WiFi network once configured,
-    // or its own setup access point while it is being provisioned (when
-    // localIP() would still read 0.0.0.0).
-    int ssid_page = display_carousel->add_page("WiFi SSID");
-    int ip_page = display_carousel->add_page("WiFi IP");
-    event_loop()->onRepeat(1000, [ssid_page, ip_page]() {
-      if (WiFi.isConnected()) {
-        display_carousel->set_value(ssid_page, WiFi.SSID());
-        display_carousel->set_value(ip_page, WiFi.localIP().toString());
-      } else if (WiFi.getMode() & WIFI_AP) {
-        display_carousel->set_value(ssid_page, WiFi.softAPSSID());
-        display_carousel->set_value(ip_page, WiFi.softAPIP().toString());
-      } else {
-        display_carousel->set_value(ssid_page, "none");
-        display_carousel->set_value(ip_page, "none");
-      }
-    });
+    // WiFi pages, each pair shown only while that interface is enabled.
+    // SensESP can run its own access point and a client connection to the
+    // boat's network at the same time (both are set in WiFi Settings).
+    int ap_ssid_page = display_carousel->add_page("WiFi SSID");
+    int ap_ip_page = display_carousel->add_page("WiFi IP");
+    int boat_ssid_page = display_carousel->add_page("WiFi Boat");
+    int boat_ip_page = display_carousel->add_page("WiFi Boat");
+    event_loop()->onRepeat(
+        1000, [ap_ssid_page, ap_ip_page, boat_ssid_page, boat_ip_page]() {
+          wifi_mode_t mode = WiFi.getMode();
+
+          // The device's own access point.
+          bool ap_on = mode & WIFI_AP;
+          display_carousel->set_visible(ap_ssid_page, ap_on);
+          display_carousel->set_visible(ap_ip_page, ap_on);
+          if (ap_on) {
+            display_carousel->set_value(ap_ssid_page, WiFi.softAPSSID());
+            display_carousel->set_value(ap_ip_page,
+                                        WiFi.softAPIP().toString());
+          }
+
+          // The boat's network: name and the address its DHCP gave us.
+          bool client_on = mode & WIFI_STA;
+          display_carousel->set_visible(boat_ssid_page, client_on);
+          display_carousel->set_visible(boat_ip_page, client_on);
+          if (client_on) {
+            bool connected = WiFi.isConnected();
+            display_carousel->set_value(
+                boat_ssid_page, connected ? WiFi.SSID() : "not connected");
+            display_carousel->set_value(
+                boat_ip_page,
+                connected ? WiFi.localIP().toString() : "not connected");
+          }
+        });
   }
 
   // Heap and main-loop-stack diagnostics on the status page. The largest free

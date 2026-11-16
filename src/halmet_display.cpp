@@ -82,25 +82,36 @@ DisplayCarousel::DisplayCarousel(Adafruit_SSD1306* display,
 }
 
 int DisplayCarousel::add_page(const String& title, const String& value) {
-  pages_.emplace_back(title, value);
+  pages_.push_back(Page{title, value, true});
   return pages_.size() - 1;
 }
 
 void DisplayCarousel::set_title(int page, const String& title) {
-  if (page >= 0 && page < (int)pages_.size()) pages_[page].first = title;
+  if (page >= 0 && page < (int)pages_.size()) pages_[page].title = title;
 }
 
 void DisplayCarousel::set_value(int page, const String& value) {
-  if (page >= 0 && page < (int)pages_.size()) pages_[page].second = value;
+  if (page >= 0 && page < (int)pages_.size()) pages_[page].value = value;
+}
+
+void DisplayCarousel::set_visible(int page, bool visible) {
+  if (page >= 0 && page < (int)pages_.size()) pages_[page].visible = visible;
 }
 
 void DisplayCarousel::tick() {
-  if (pages_.empty()) return;
+  // Nothing to show if every page is hidden; leave the screen as it is.
+  bool any_visible = false;
+  for (const auto& page : pages_) any_visible |= page.visible;
+  if (!any_visible) return;
+
   unsigned long elapsed = millis() - page_start_;
 
   // A value wider than the screen scrolls; its page lasts at least as long
   // as the scroll plus both pauses.
-  int overflow = TextWidth(pages_[current_].second, kValueSize) - kScreenWidth;
+  auto overflow_of = [this](size_t i) {
+    return TextWidth(pages_[i].value, kValueSize) - kScreenWidth;
+  };
+  int overflow = overflow_of(current_);
   unsigned long duration = page_ms_;
   if (overflow > 0) {
     unsigned long scroll_ms =
@@ -108,12 +119,14 @@ void DisplayCarousel::tick() {
     unsigned long needed = 2 * kScrollPauseMs + scroll_ms;
     if (needed > duration) duration = needed;
   }
-  if (elapsed >= duration) {
-    current_ = (current_ + 1) % pages_.size();
+  // Move on when the page has had its time, or at once if it was hidden.
+  if (elapsed >= duration || !pages_[current_].visible) {
+    do {
+      current_ = (current_ + 1) % pages_.size();
+    } while (!pages_[current_].visible);
     page_start_ = millis();
     elapsed = 0;
-    overflow =
-        TextWidth(pages_[current_].second, kValueSize) - kScreenWidth;
+    overflow = overflow_of(current_);
   }
 
   int offset = 0;
@@ -122,8 +135,8 @@ void DisplayCarousel::tick() {
     if (offset > overflow) offset = overflow;
   }
 
-  const String& title = pages_[current_].first;
-  const String& value = pages_[current_].second;
+  const String& title = pages_[current_].title;
+  const String& value = pages_[current_].value;
   if (title == drawn_title_ && value == drawn_value_ &&
       offset == drawn_offset_) {
     return;
