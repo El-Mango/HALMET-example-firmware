@@ -300,12 +300,21 @@ void setup() {
   // a2_voltage->connect_to(a2_distance);
 
 #ifdef ENABLE_SIGNALK
-  a2_voltage->connect_to(
-      new SKOutputFloat("sensors.a2.voltage", "Analog Voltage A2",
-                        new SKMetadata("V", "Analog Voltage A2")));
+  // The second argument is the config path, not a display name: it must start
+  // with "/" or the SK path cannot be saved or edited in the web UI.
+  auto a2_voltage_sk_output =
+      new SKOutputFloat("sensors.a2.voltage", "/Voltage A2/SK Path",
+                        new SKMetadata("V", "Analog Voltage A2"));
+
+  ConfigItem(a2_voltage_sk_output)
+      ->set_title("Analog Voltage A2 SK Path")
+      ->set_description("Signal K path for the voltage of analog input A2")
+      ->set_sort_order(3001);
+
+  a2_voltage->connect_to(a2_voltage_sk_output);
   // Example of how to output the distance value to Signal K.
   // a2_distance->connect_to(
-  //     new SKOutputFloat("sensors.a2.distance", "Analog Distance A2",
+  //     new SKOutputFloat("sensors.a2.distance", "/Distance A2/SK Path",
   //                       new SKMetadata("m", "Analog Distance A2")));
 #endif
 
